@@ -1,0 +1,7 @@
+streamlit
+pandas
+googlemaps
+google-genai
+requests
+pillow
+openpyxl
