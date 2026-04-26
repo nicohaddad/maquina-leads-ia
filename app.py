@@ -45,6 +45,18 @@ st.sidebar.caption("Filtra los negocios por su calificación en Google Maps.")
 min_rating = st.sidebar.slider("Rating Mínimo", 0.0, 5.0, 0.0, 0.5)
 max_rating = st.sidebar.slider("Rating Máximo", 0.0, 5.0, 5.0, 0.5)
 
+with st.sidebar.expander("Ajuste Fino de Puntos (Matriz)", expanded=False):
+    st.caption("Puntos otorgados a cada criterio para calcular el Score Final.")
+    pts_resenas_altas = st.number_input("100+ Reseñas", value=10)
+    pts_resenas_medias = st.number_input("30-99 Reseñas", value=6)
+    pts_rating_alto = st.number_input("Rating 4.6+", value=8)
+    pts_no_web = st.number_input("No tiene página web", value=15)
+    pts_web_mala = st.number_input("Web mala/vieja", value=10)
+    pts_premium = st.number_input("Servicios premium", value=10)
+    pts_marketing = st.number_input("Instagram activo", value=4)
+    pts_whatsapp = st.number_input("WhatsApp visible", value=7)
+    pts_agenda = st.number_input("Botón de Agenda/Citas", value=6)
+
 st.sidebar.markdown("---")
 st.sidebar.header("🧠 Personalización de IA (Prompts)")
 with st.sidebar.expander("Modificar Instrucciones de IA", expanded=False):
@@ -218,15 +230,15 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                 # --- LOGICA DE LEAD SCORING ---
                 # 1. Confianza/Reseñas
                 resenas = lead['Reseñas']
-                if resenas >= 100: score += 10
-                elif resenas >= 30: score += 6
+                if resenas >= 100: score += pts_resenas_altas
+                elif resenas >= 30: score += pts_resenas_medias
                 
                 # 2. Confianza/Rating
-                if lead['Rating'] >= 4.6: score += 8
+                if lead['Rating'] >= 4.6: score += pts_rating_alto
                 
                 if lead['Website'] == 'No tiene':
                     evaluacion = "CLIENTE IDEAL - No tiene página web."
-                    score += 15 # No tiene web
+                    score += pts_no_web # No tiene web
                     
                     # Generar correo para quien no tiene web
                     try:
@@ -249,11 +261,11 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                         st.session_state.total_tokens += (t_in + t_out)
                         
                         # --- SCORING VISUAL (IA) ---
-                        if datos_ia.get('aprobado') == False: score += 10 # Web mala
-                        if datos_ia.get('servicios_premium'): score += 10
-                        if datos_ia.get('instagram_visible'): score += 4
-                        if datos_ia.get('whatsapp_visible'): score += 7
-                        if datos_ia.get('agenda_visible'): score += 6
+                        if datos_ia.get('aprobado') == False: score += pts_web_mala
+                        if datos_ia.get('servicios_premium'): score += pts_premium
+                        if datos_ia.get('instagram_visible'): score += pts_marketing
+                        if datos_ia.get('whatsapp_visible'): score += pts_whatsapp
+                        if datos_ia.get('agenda_visible'): score += pts_agenda
                         
                     else:
                         evaluacion = "Error al cargar la página."
