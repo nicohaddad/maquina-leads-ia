@@ -26,6 +26,26 @@ st.sidebar.header("🎯 Parámetros de Búsqueda")
 search_query = st.sidebar.text_input("¿Qué buscas?", value="Estéticas en Polanco, CDMX")
 max_results = st.sidebar.slider("Límite de negocios a analizar", min_value=1, max_value=20, value=5)
 
+st.sidebar.markdown("---")
+st.sidebar.header("🧠 Personalización de IA (Prompts)")
+with st.sidebar.expander("Modificar Instrucciones de IA", expanded=False):
+    st.caption("Puedes usar las variables {business_name}, {website_url} y {evaluacion} en tus correos.")
+    prompt_eval_input = st.text_area(
+        "Prompt de Evaluación Visual",
+        value="Eres un experto diseñador web. Revisa la captura de pantalla de esta página web. Evalúa si el diseño es moderno, o si parece antiguo, si tiene mala resolución o es poco profesional. Responde con una única palabra inicial: 'APROBADO' o 'RECHAZADO'. Luego, en la misma línea, escribe un guión '-' y da una breve razón de 1 sola frase del por qué. Ejemplo: RECHAZADO - El diseño parece de los años 2000 y los colores chocan.",
+        height=150
+    )
+    prompt_email_input = st.text_area(
+        "Prompt de Correo (Tienen Web)",
+        value="Escribe un correo de ventas frío corto dirigido al dueño de '{business_name}'. Dile que visitaste su página web ({website_url}) y notaste lo siguiente: {evaluacion}. Ofrécele tus servicios de creación de páginas web con IA. Ofrece un prototipo gratis en 48h. Tono profesional, máximo 3 párrafos.",
+        height=150
+    )
+    prompt_noweb_input = st.text_area(
+        "Prompt de Correo (NO Tienen Web)",
+        value="Escribe un correo corto de ventas al dueño de '{business_name}'. Dile que los buscaste en internet y notaste que no tienen página web, lo cual les hace perder clientes. Ofrécele hacerles una web moderna con IA. Tono profesional.",
+        height=100
+    )
+
 # --- FUNCIONES CORE ---
 
 def get_places(query, api_key, max_results=5):
@@ -69,44 +89,40 @@ def get_website_screenshot(url):
         st.warning(f"No se pudo tomar captura de {url}: {e}")
     return None
 
-def evaluate_website_and_write_email(img, website_url, business_name, gemini_key):
+def evaluate_website_and_write_email(img, website_url, business_name, gemini_key, custom_prompt_eval, custom_prompt_email):
     """Usa Gemini para evaluar la imagen y redactar el correo."""
     try:
         client = genai.Client(api_key=gemini_key)
+        tokens_in = 0
+        tokens_out = 0
         
         # 1. Evaluación Visual
-        prompt_eval = (
-            "Eres un experto diseñador web. Revisa la captura de pantalla de esta página web. "
-            "Evalúa si el diseño es moderno, o si parece antiguo, si tiene mala resolución o es poco profesional. "
-            "Responde con una única palabra inicial: 'APROBADO' (si se ve moderno y profesional) o 'RECHAZADO' (si necesita un rediseño urgente). "
-            "Luego, en la misma línea, escribe un guión '-' y da una breve razón de 1 sola frase del por qué. "
-            "Ejemplo: RECHAZADO - El diseño parece de los años 2000, no está optimizado y los colores chocan."
-        )
-        
         response_eval = client.models.generate_content(
             model='gemini-2.5-pro',
-            contents=[img, prompt_eval]
+            contents=[img, custom_prompt_eval]
         )
         evaluacion = response_eval.text.strip()
+        if hasattr(response_eval, 'usage_metadata') and response_eval.usage_metadata:
+            tokens_in += getattr(response_eval.usage_metadata, 'prompt_token_count', 0)
+            tokens_out += getattr(response_eval.usage_metadata, 'candidates_token_count', 0)
         
         # 2. Generación del Correo
-        prompt_email = (
-            f"Escribe un correo electrónico de ventas frío (cold email) corto y persuasivo dirigido al dueño de '{business_name}'. "
-            f"El correo debe mencionar que visitaste su página web ({website_url}) y notaste lo siguiente: {evaluacion}. "
-            "Ofrécele tus servicios de creación de páginas web modernas con Inteligencia Artificial. "
-            "Dile que puedes hacerle un prototipo gratuito en 48 horas. "
-            "Mantén un tono profesional pero cercano, no más de 3 párrafos."
-        )
+        # Reemplazo seguro de variables
+        prompt_email = custom_prompt_email.replace("{business_name}", business_name).replace("{website_url}", website_url).replace("{evaluacion}", evaluacion)
+
         
         response_email = client.models.generate_content(
             model='gemini-2.5-pro',
             contents=prompt_email
         )
         correo = response_email.text.strip()
+        if hasattr(response_email, 'usage_metadata') and response_email.usage_metadata:
+            tokens_in += getattr(response_email.usage_metadata, 'prompt_token_count', 0)
+            tokens_out += getattr(response_email.usage_metadata, 'candidates_token_count', 0)
         
-        return evaluacion, correo
+        return evaluacion, correo, tokens_in, tokens_out
     except Exception as e:
-        return f"Error en IA: {str(e)}", "No se pudo generar el correo."
+        return f"Error en IA: {str(e)}", "No se pudo generar el correo.", 0, 0
 
 # --- INTERFAZ PRINCIPAL ---
 
@@ -123,6 +139,15 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
             st.error("No se encontraron resultados o hubo un error con la API de Google Maps.")
         else:
             st.success(f"¡Se encontraron {len(leads)} prospectos!")
+            
+            # --- Métricas de Costo ---
+            col1, col2, col3 = st.columns(3)
+            metric_leads = col1.empty()
+            metric_tokens = col2.empty()
+            metric_cost = col3.empty()
+            
+            total_tokens_in = 0
+            total_tokens_out = 0
             
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -141,9 +166,12 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                     # Generar correo para quien no tiene web
                     try:
                         client = genai.Client(api_key=gemini_api_key)
-                        prompt_no_web = f"Escribe un correo corto de ventas al dueño de '{lead['Nombre']}'. Dile que los buscaste en internet y notaste que no tienen página web, lo cual les hace perder clientes. Ofrécele hacerles una web moderna con IA. Tono profesional."
+                        prompt_no_web = prompt_noweb_input.replace("{business_name}", lead['Nombre'])
                         resp = client.models.generate_content(model='gemini-2.5-pro', contents=prompt_no_web)
                         correo = resp.text.strip()
+                        if hasattr(resp, 'usage_metadata') and resp.usage_metadata:
+                            total_tokens_in += getattr(resp.usage_metadata, 'prompt_token_count', 0)
+                            total_tokens_out += getattr(resp.usage_metadata, 'candidates_token_count', 0)
                     except:
                         correo = "Error al generar."
                 else:
@@ -152,7 +180,9 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                     
                     if img:
                         status_text.text(f"La IA está evaluando el diseño de {lead['Nombre']}...")
-                        evaluacion, correo = evaluate_website_and_write_email(img, lead['Website'], lead['Nombre'], gemini_api_key)
+                        evaluacion, correo, t_in, t_out = evaluate_website_and_write_email(img, lead['Website'], lead['Nombre'], gemini_api_key, prompt_eval_input, prompt_email_input)
+                        total_tokens_in += t_in
+                        total_tokens_out += t_out
                     else:
                         evaluacion = "Error al cargar la página."
                         correo = "No se pudo generar porque la web falló al cargar."
@@ -166,6 +196,14 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                     "Correo Generado": correo
                 }
                 resultados_finales.append(lead_data)
+                
+                # Actualizar Métricas en tiempo real
+                metric_leads.metric("Prospectos Analizados", f"{i+1}/{len(leads)}")
+                metric_tokens.metric("Tokens Usados", f"{total_tokens_in + total_tokens_out:,}")
+                
+                # Costo estimado Gemini 1.5 Pro ($1.25 / 1M prompt, $3.75 / 1M completion)
+                costo_estimado = (total_tokens_in / 1_000_000 * 1.25) + (total_tokens_out / 1_000_000 * 3.75)
+                metric_cost.metric("Costo Estimado (USD)", f"${costo_estimado:.4f}")
                 
                 progress_bar.progress((i + 1) / len(leads))
                 time.sleep(1) # Pequeña pausa para no saturar APIs
