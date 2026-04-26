@@ -18,6 +18,10 @@ st.markdown("Encuentra negocios, evalúa sus páginas web con Inteligencia Artif
 # Inicializar estado para guardar resultados y no perderlos
 if 'resultados' not in st.session_state:
     st.session_state.resultados = None
+if 'total_tokens' not in st.session_state:
+    st.session_state.total_tokens = 0
+if 'costo_estimado' not in st.session_state:
+    st.session_state.costo_estimado = 0.0
 
 # --- BARRA LATERAL: CONFIGURACIÓN ---
 st.sidebar.header("🔑 Configuración de APIs")
@@ -74,8 +78,8 @@ def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0):
                 break
                 
             place_id = place['place_id']
-            # Obtener detalles completos para sacar el website, email y url
-            details = gmaps.place(place_id, fields=['name', 'website', 'formatted_phone_number', 'rating', 'url'])['result']
+            # Obtener detalles completos
+            details = gmaps.place(place_id, fields=['name', 'website', 'formatted_phone_number', 'rating', 'url', 'user_ratings_total'])['result']
             
             rating = details.get('rating', 0.0)
             if not (min_rating <= rating <= max_rating):
@@ -86,6 +90,7 @@ def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0):
                 "Teléfono": details.get('formatted_phone_number', 'N/A'),
                 "Website": details.get('website', 'No tiene'),
                 "Rating": rating,
+                "Reseñas": details.get('user_ratings_total', 0),
                 "Google Maps": details.get('url', f"https://www.google.com/maps/place/?q=place_id:{place_id}")
             })
         return results
@@ -113,25 +118,50 @@ def get_website_screenshot(url):
     return None
 
 def evaluate_website_and_write_email(img, website_url, business_name, gemini_key, custom_prompt_eval, custom_prompt_email):
-    """Usa Gemini para evaluar la imagen y redactar el correo."""
+    """Usa Gemini para evaluar la imagen y extraer datos clave para el scoring."""
+    import json
     try:
         client = genai.Client(api_key=gemini_key)
         tokens_in = 0
         tokens_out = 0
         
-        # 1. Evaluación Visual
+        # 1. Evaluación Visual Estructurada
+        # Forzamos a la IA a devolver un JSON con la evaluación y los checks de la matriz
+        json_prompt = custom_prompt_eval + """
+        \n\nIMPORTANTE: Debes responder ÚNICAMENTE con un objeto JSON válido con esta estructura exacta, sin texto extra (no uses markdown de código):
+        {
+            "aprobado": false,
+            "razon": "breve razón aquí",
+            "servicios_premium": true o false (si ves botox, láser, faciales premium, etc),
+            "instagram_visible": true o false (si ves el logo o link de Instagram),
+            "whatsapp_visible": true o false (si ves logo de WhatsApp o número visible),
+            "agenda_visible": true o false (si ves botón de 'Agendar', 'Reservar cita')
+        }
+        """
         response_eval = client.models.generate_content(
             model='gemini-2.5-pro',
-            contents=[img, custom_prompt_eval]
+            contents=[img, json_prompt]
         )
-        evaluacion = response_eval.text.strip()
+        
+        # Limpiar y parsear JSON
+        raw_text = response_eval.text.strip()
+        if raw_text.startswith("```json"):
+            raw_text = raw_text[7:-3].strip()
+        
+        try:
+            datos_ia = json.loads(raw_text)
+        except:
+            datos_ia = {"aprobado": False, "razon": "Error al analizar imagen", "servicios_premium": False, "instagram_visible": False, "whatsapp_visible": False, "agenda_visible": False}
+
+        evaluacion_texto = "APROBADO" if datos_ia.get("aprobado") else "RECHAZADO"
+        evaluacion_completa = f"{evaluacion_texto} - {datos_ia.get('razon', '')}"
+
         if hasattr(response_eval, 'usage_metadata') and response_eval.usage_metadata:
             tokens_in += getattr(response_eval.usage_metadata, 'prompt_token_count', 0)
             tokens_out += getattr(response_eval.usage_metadata, 'candidates_token_count', 0)
         
         # 2. Generación del Correo
-        # Reemplazo seguro de variables
-        prompt_email = custom_prompt_email.replace("{business_name}", business_name).replace("{website_url}", website_url).replace("{evaluacion}", evaluacion)
+        prompt_email = custom_prompt_email.replace("{business_name}", business_name).replace("{website_url}", website_url).replace("{evaluacion}", evaluacion_completa)
 
         
         response_email = client.models.generate_content(
@@ -143,9 +173,9 @@ def evaluate_website_and_write_email(img, website_url, business_name, gemini_key
             tokens_in += getattr(response_email.usage_metadata, 'prompt_token_count', 0)
             tokens_out += getattr(response_email.usage_metadata, 'candidates_token_count', 0)
         
-        return evaluacion, correo, tokens_in, tokens_out
+        return evaluacion_completa, correo, tokens_in, tokens_out, datos_ia
     except Exception as e:
-        return f"Error en IA: {str(e)}", "No se pudo generar el correo.", 0, 0
+        return f"Error en IA: {str(e)}", "No se pudo generar el correo.", 0, 0, {}
 
 # --- INTERFAZ PRINCIPAL ---
 
@@ -163,17 +193,18 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
         else:
             st.success(f"¡Se encontraron {len(leads)} prospectos!")
             
-            # --- Métricas de Costo ---
-            col1, col2, col3 = st.columns(3)
-            metric_leads = col1.empty()
-            metric_tokens = col2.empty()
-            metric_cost = col3.empty()
-            
-            total_tokens_in = 0
-            total_tokens_out = 0
-            
+            # --- Métricas en tiempo real ---
             progress_bar = st.progress(0)
             status_text = st.empty()
+            
+            # Limpiar contadores de sesión para nueva corrida
+            st.session_state.total_tokens = 0
+            st.session_state.costo_estimado = 0.0
+            
+            # Espacios vacíos para actualizar en vivo
+            col1, col2 = st.columns(2)
+            metric_tokens_live = col1.empty()
+            metric_cost_live = col2.empty()
             
             resultados_finales = []
             
@@ -182,9 +213,20 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                 
                 evaluacion = "N/A"
                 correo = "N/A"
+                score = 0
+                
+                # --- LOGICA DE LEAD SCORING ---
+                # 1. Confianza/Reseñas
+                resenas = lead['Reseñas']
+                if resenas >= 100: score += 10
+                elif resenas >= 30: score += 6
+                
+                # 2. Confianza/Rating
+                if lead['Rating'] >= 4.6: score += 8
                 
                 if lead['Website'] == 'No tiene':
                     evaluacion = "CLIENTE IDEAL - No tiene página web."
+                    score += 15 # No tiene web
                     
                     # Generar correo para quien no tiene web
                     try:
@@ -193,8 +235,8 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                         resp = client.models.generate_content(model='gemini-2.5-pro', contents=prompt_no_web)
                         correo = resp.text.strip()
                         if hasattr(resp, 'usage_metadata') and resp.usage_metadata:
-                            total_tokens_in += getattr(resp.usage_metadata, 'prompt_token_count', 0)
-                            total_tokens_out += getattr(resp.usage_metadata, 'candidates_token_count', 0)
+                            st.session_state.total_tokens += getattr(resp.usage_metadata, 'prompt_token_count', 0)
+                            st.session_state.total_tokens += getattr(resp.usage_metadata, 'candidates_token_count', 0)
                     except:
                         correo = "Error al generar."
                 else:
@@ -203,19 +245,28 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                     
                     if img:
                         status_text.text(f"La IA está evaluando el diseño de {lead['Nombre']}...")
-                        evaluacion, correo, t_in, t_out = evaluate_website_and_write_email(img, lead['Website'], lead['Nombre'], gemini_api_key, prompt_eval_input, prompt_email_input)
-                        total_tokens_in += t_in
-                        total_tokens_out += t_out
+                        evaluacion, correo, t_in, t_out, datos_ia = evaluate_website_and_write_email(img, lead['Website'], lead['Nombre'], gemini_api_key, prompt_eval_input, prompt_email_input)
+                        st.session_state.total_tokens += (t_in + t_out)
+                        
+                        # --- SCORING VISUAL (IA) ---
+                        if datos_ia.get('aprobado') == False: score += 10 # Web mala
+                        if datos_ia.get('servicios_premium'): score += 10
+                        if datos_ia.get('instagram_visible'): score += 4
+                        if datos_ia.get('whatsapp_visible'): score += 7
+                        if datos_ia.get('agenda_visible'): score += 6
+                        
                     else:
                         evaluacion = "Error al cargar la página."
                         correo = "No se pudo generar porque la web falló al cargar."
                 
                 # Guardar resultado
                 lead_data = {
+                    "Score": score,
                     "Negocio": lead['Nombre'],
-                    "Teléfono": lead['Teléfono'],
-                    "Website": lead['Website'],
                     "Rating": lead['Rating'],
+                    "Reseñas": lead['Reseñas'],
+                    "Website": lead['Website'],
+                    "Teléfono": lead['Teléfono'],
                     "Link Maps": lead['Google Maps'],
                     "Diagnóstico IA": evaluacion,
                     "Correo Generado": correo
@@ -223,12 +274,13 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                 resultados_finales.append(lead_data)
                 
                 # Actualizar Métricas en tiempo real
-                metric_leads.metric("Prospectos Analizados", f"{i+1}/{len(leads)}")
-                metric_tokens.metric("Tokens Usados", f"{total_tokens_in + total_tokens_out:,}")
+                status_text.text(f"Analizando prospecto {i+1}/{len(leads)}: {lead['Nombre']}...")
+                metric_tokens_live.metric("Tokens Usados (En vivo)", f"{st.session_state.total_tokens:,}")
                 
                 # Costo estimado Gemini 1.5 Pro ($1.25 / 1M prompt, $3.75 / 1M completion)
-                costo_estimado = (total_tokens_in / 1_000_000 * 1.25) + (total_tokens_out / 1_000_000 * 3.75)
-                metric_cost.metric("Costo Estimado (USD)", f"${costo_estimado:.4f}")
+                # Para simplificar el vivo, usamos un promedio de $2.50 por 1M tokens totales
+                st.session_state.costo_estimado = (st.session_state.total_tokens / 1_000_000) * 2.50
+                metric_cost_live.metric("Costo Estimado (USD)", f"${st.session_state.costo_estimado:.4f}")
                 
                 progress_bar.progress((i + 1) / len(leads))
                 time.sleep(1) # Pequeña pausa para no saturar APIs
@@ -240,7 +292,14 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
 
 # --- MOSTRAR RESULTADOS GUARDADOS ---
 if st.session_state.resultados is not None:
+    st.markdown("---")
     st.markdown("### 📊 Resultados de tu Prospección")
+    
+    # Mostrar métricas guardadas de forma permanente
+    col1, col2 = st.columns(2)
+    col1.metric("Total Tokens Usados", f"{st.session_state.total_tokens:,}")
+    col2.metric("Costo Final (USD)", f"${st.session_state.costo_estimado:.4f}")
+    
     st.dataframe(st.session_state.resultados)
     
     # Botón de Descarga Excel
