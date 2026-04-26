@@ -15,16 +15,31 @@ st.set_page_config(page_title="Máquina de Prospección IA", page_icon="🤖", l
 st.title("🤖 Máquina Automática de Prospección con IA")
 st.markdown("Encuentra negocios, evalúa sus páginas web con Inteligencia Artificial y genera correos de ventas personalizados en minutos.")
 
+# Inicializar estado para guardar resultados y no perderlos
+if 'resultados' not in st.session_state:
+    st.session_state.resultados = None
+
 # --- BARRA LATERAL: CONFIGURACIÓN ---
 st.sidebar.header("🔑 Configuración de APIs")
 st.sidebar.markdown("Ingresa tus claves para que el sistema funcione.")
-gmaps_api_key = st.sidebar.text_input("Google Maps API Key", type="password")
-gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
+
+# Cargar desde los "Secrets" de la nube si existen
+default_gmaps = st.secrets["GMAPS_API_KEY"] if "GMAPS_API_KEY" in st.secrets else ""
+default_gemini = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else ""
+
+gmaps_api_key = st.sidebar.text_input("Google Maps API Key", value=default_gmaps, type="password")
+gemini_api_key = st.sidebar.text_input("Gemini API Key", value=default_gemini, type="password")
 
 st.sidebar.markdown("---")
 st.sidebar.header("🎯 Parámetros de Búsqueda")
 search_query = st.sidebar.text_input("¿Qué buscas?", value="Estéticas en Polanco, CDMX")
 max_results = st.sidebar.slider("Límite de negocios a analizar", min_value=1, max_value=20, value=5)
+
+st.sidebar.markdown("---")
+st.sidebar.header("⭐ Filtros de Calidad (Scoring)")
+st.sidebar.caption("Filtra los negocios por su calificación en Google Maps.")
+min_rating = st.sidebar.slider("Rating Mínimo", 0.0, 5.0, 0.0, 0.5)
+max_rating = st.sidebar.slider("Rating Máximo", 0.0, 5.0, 5.0, 0.5)
 
 st.sidebar.markdown("---")
 st.sidebar.header("🧠 Personalización de IA (Prompts)")
@@ -48,22 +63,30 @@ with st.sidebar.expander("Modificar Instrucciones de IA", expanded=False):
 
 # --- FUNCIONES CORE ---
 
-def get_places(query, api_key, max_results=5):
+def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0):
     """Obtiene los lugares usando Google Maps API."""
     gmaps = googlemaps.Client(key=api_key)
     try:
         places_result = gmaps.places(query=query)
         results = []
-        for place in places_result.get('results', [])[:max_results]:
+        for place in places_result.get('results', []):
+            if len(results) >= max_results:
+                break
+                
             place_id = place['place_id']
-            # Obtener detalles completos para sacar el website y email si existe
-            details = gmaps.place(place_id, fields=['name', 'website', 'formatted_phone_number', 'rating'])['result']
+            # Obtener detalles completos para sacar el website, email y url
+            details = gmaps.place(place_id, fields=['name', 'website', 'formatted_phone_number', 'rating', 'url'])['result']
             
+            rating = details.get('rating', 0.0)
+            if not (min_rating <= rating <= max_rating):
+                continue
+                
             results.append({
                 "Nombre": details.get('name', 'N/A'),
                 "Teléfono": details.get('formatted_phone_number', 'N/A'),
                 "Website": details.get('website', 'No tiene'),
-                "Rating": details.get('rating', 'N/A')
+                "Rating": rating,
+                "Google Maps": details.get('url', f"https://www.google.com/maps/place/?q=place_id:{place_id}")
             })
         return results
     except Exception as e:
@@ -133,7 +156,7 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
         st.info(f"Buscando '{search_query}'...")
         
         with st.spinner("1️⃣ Extrayendo negocios de Google Maps..."):
-            leads = get_places(search_query, gmaps_api_key, max_results)
+            leads = get_places(search_query, gmaps_api_key, max_results, min_rating, max_rating)
             
         if not leads:
             st.error("No se encontraron resultados o hubo un error con la API de Google Maps.")
@@ -192,6 +215,8 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                     "Negocio": lead['Nombre'],
                     "Teléfono": lead['Teléfono'],
                     "Website": lead['Website'],
+                    "Rating": lead['Rating'],
+                    "Link Maps": lead['Google Maps'],
                     "Diagnóstico IA": evaluacion,
                     "Correo Generado": correo
                 }
@@ -210,20 +235,24 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                 
             status_text.text("¡Prospección completada! 🎉")
             
-            # Mostrar resultados en tabla
-            df = pd.DataFrame(resultados_finales)
-            st.dataframe(df)
-            
-            # Botón de Descarga Excel
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, sheet_name='Leads')
-            
-            excel_data = output.getvalue()
-            
-            st.download_button(
-                label="📥 Descargar Leads en Excel (.xlsx)",
-                data=excel_data,
-                file_name="prospectos_generados.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            # Guardar en la memoria de la sesión
+            st.session_state.resultados = pd.DataFrame(resultados_finales)
+
+# --- MOSTRAR RESULTADOS GUARDADOS ---
+if st.session_state.resultados is not None:
+    st.markdown("### 📊 Resultados de tu Prospección")
+    st.dataframe(st.session_state.resultados)
+    
+    # Botón de Descarga Excel
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        st.session_state.resultados.to_excel(writer, index=False, sheet_name='Leads')
+    
+    excel_data = output.getvalue()
+    
+    st.download_button(
+        label="📥 Descargar Leads en Excel (.xlsx)",
+        data=excel_data,
+        file_name="prospectos_generados.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
