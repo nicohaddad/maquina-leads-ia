@@ -38,6 +38,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("🎯 Parámetros de Búsqueda")
 search_query = st.sidebar.text_input("¿Qué buscas?", value="Estéticas en Polanco, CDMX")
 max_results = st.sidebar.slider("Límite de negocios a analizar", min_value=1, max_value=20, value=5)
+solo_sin_web = st.sidebar.checkbox("🚨 Mostrar SOLO negocios SIN página web", value=False, help="Si marcas esto, el robot ignorará cualquier negocio que ya tenga sitio web.")
 
 st.sidebar.markdown("---")
 st.sidebar.header("⭐ Filtros de Calidad (Scoring)")
@@ -79,7 +80,7 @@ with st.sidebar.expander("Modificar Instrucciones de IA", expanded=False):
 
 # --- FUNCIONES CORE ---
 
-def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0):
+def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0, solo_sin_web=False):
     """Obtiene los lugares usando Google Maps API."""
     gmaps = googlemaps.Client(key=api_key)
     try:
@@ -97,10 +98,14 @@ def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0):
             if not (min_rating <= rating <= max_rating):
                 continue
                 
+            website = details.get('website', 'No tiene')
+            if solo_sin_web and website != 'No tiene':
+                continue
+                
             results.append({
                 "Nombre": details.get('name', 'N/A'),
                 "Teléfono": details.get('formatted_phone_number', 'N/A'),
-                "Website": details.get('website', 'No tiene'),
+                "Website": website,
                 "Rating": rating,
                 "Reseñas": details.get('user_ratings_total', 0),
                 "Google Maps": details.get('url', f"https://www.google.com/maps/place/?q=place_id:{place_id}")
@@ -171,8 +176,12 @@ def evaluate_website_and_write_email(img, website_url, business_name, gemini_key
         if hasattr(response_eval, 'usage_metadata') and response_eval.usage_metadata:
             tokens_in += getattr(response_eval.usage_metadata, 'prompt_token_count', 0)
             tokens_out += getattr(response_eval.usage_metadata, 'candidates_token_count', 0)
+            
+        # AHORRO DE TOKENS: Si la web es buena, no necesitamos escribirle un correo para venderle otra.
+        if datos_ia.get("aprobado"):
+            return evaluacion_completa, "DESCARTADO - El cliente ya tiene una web de alta calidad.", tokens_in, tokens_out, datos_ia
         
-        # 2. Generación del Correo
+        # 2. Generación del Correo (Solo si la web fue RECHAZADA)
         prompt_email = custom_prompt_email.replace("{business_name}", business_name).replace("{website_url}", website_url).replace("{evaluacion}", evaluacion_completa)
 
         
@@ -198,7 +207,7 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
         st.info(f"Buscando '{search_query}'...")
         
         with st.spinner("1️⃣ Extrayendo negocios de Google Maps..."):
-            leads = get_places(search_query, gmaps_api_key, max_results, min_rating, max_rating)
+            leads = get_places(search_query, gmaps_api_key, max_results, min_rating, max_rating, solo_sin_web)
             
         if not leads:
             st.error("No se encontraron resultados o hubo un error con la API de Google Maps.")
