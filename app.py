@@ -347,9 +347,19 @@ if st.session_state.resultados is not None:
     
     excel_data = output.getvalue()
     
+    # Crear nombre dinámico para el archivo Excel
+    import datetime
+    import re
+    # Limpiar la búsqueda para que sea un nombre de archivo válido
+    safe_query = re.sub(r'[^a-zA-Z0-9]', '_', search_query)
+    # Evitar múltiples guiones bajos seguidos
+    safe_query = re.sub(r'_+', '_', safe_query).strip('_')
+    today_str = datetime.date.today().strftime('%Y-%m-%d')
+    dynamic_filename = f"leads_{safe_query}_{today_str}.xlsx"
+    
     st.download_button(
         label="📥 Descargar Leads en Excel (.xlsx)",
         data=excel_data,
-        file_name="prospectos_generados.xlsx",
+        file_name=dynamic_filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
