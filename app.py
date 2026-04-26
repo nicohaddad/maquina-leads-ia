@@ -77,6 +77,11 @@ with st.sidebar.expander("Modificar Instrucciones de IA", expanded=False):
         value="Escribe un correo corto de ventas al dueño de '{business_name}'. Dile que los buscaste en internet y notaste que no tienen página web, lo cual les hace perder clientes. Ofrécele hacerles una web moderna con IA. Tono profesional.",
         height=100
     )
+    prompt_caido_input = st.text_area(
+        "Prompt de Correo (Dominio Caído/Expirado)",
+        value="Escribe un correo URGENTE al dueño de '{business_name}'. Dile que intentaste entrar a su página web ({website_url}) desde Google Maps pero está CAÍDA o el dominio expiró. Explícale que están perdiendo clientes todos los días por esto y ofrécele hacerles una web nueva y moderna con IA esta misma semana.",
+        height=120
+    )
 
 # --- FUNCIONES CORE ---
 
@@ -277,8 +282,20 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                         if datos_ia.get('agenda_visible'): score += pts_agenda
                         
                     else:
-                        evaluacion = "Error al cargar la página."
-                        correo = "No se pudo generar porque la web falló al cargar."
+                        evaluacion = "ALERTA ROJA - Sitio web caído o dominio expirado."
+                        score += 20  # Es la mejor oportunidad de venta
+                        
+                        # Generar correo de emergencia para dominio caído
+                        try:
+                            client = genai.Client(api_key=gemini_api_key)
+                            prompt_caido = prompt_caido_input.replace("{business_name}", lead['Nombre']).replace("{website_url}", lead['Website'])
+                            resp = client.models.generate_content(model='gemini-2.5-pro', contents=prompt_caido)
+                            correo = resp.text.strip()
+                            if hasattr(resp, 'usage_metadata') and resp.usage_metadata:
+                                st.session_state.total_tokens += getattr(resp.usage_metadata, 'prompt_token_count', 0)
+                                st.session_state.total_tokens += getattr(resp.usage_metadata, 'candidates_token_count', 0)
+                        except:
+                            correo = "Error al generar correo de dominio caído."
                 
                 # Guardar resultado
                 lead_data = {
