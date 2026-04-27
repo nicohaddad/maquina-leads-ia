@@ -158,12 +158,14 @@ with tab_busqueda:
 
 # --- FUNCIONES CORE ---
 
-def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0, solo_sin_web=False):
+def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0, solo_sin_web=False, console=None):
     """Obtiene los lugares usando Google Maps API, buscando en varias páginas si es necesario."""
     gmaps = googlemaps.Client(key=api_key)
     try:
         results = []
+        if console: console.write(f"📡 Conectando a los servidores de Google Maps...")
         places_result = gmaps.places(query=query)
+        pagina = 1
         
         while True:
             for place in places_result.get('results', []):
@@ -173,9 +175,13 @@ def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0, so
                 place_id = place['place_id']
                 # Obtener detalles completos
                 details = gmaps.place(place_id, fields=['name', 'website', 'formatted_phone_number', 'rating', 'url', 'user_ratings_total'])['result']
+                nombre = details.get('name', 'N/A')
+                
+                if console: console.write(f"👀 Revisando a: **{nombre}**...")
                 
                 rating = details.get('rating', 0.0)
                 if not (min_rating <= rating <= max_rating):
+                    if console: console.write(f"   ❌ Descartado: Rating muy bajo ({rating} estrellas).")
                     continue
                     
                 website = details.get('website', 'No tiene')
@@ -183,18 +189,22 @@ def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0, so
                 # --- PARCHE INTELIGENTE: BÚSQUEDA WEB EN VIVO ---
                 if website == 'No tiene':
                     try:
-                        search_term = f"{details.get('name')} {query}"
+                        search_term = f"{nombre} {query}"
+                        if console: console.write(f"   🕵️‍♂️ Buscando '{nombre}' en la web oculta...")
                         for url_result in search(search_term, num_results=3, lang="es"):
                             directorios = ['facebook.com', 'instagram.com', 'foursquare', 'tripadvisor', 'yelp', 'linkedin', 'twitter', 'tiktok', 'youtube', 'doctoralia', 'maps.google', 'whatsapp.com', 'wa.me', 'topdoctors', 'guiadental']
                             if not any(d in url_result.lower() for d in directorios):
                                 website = url_result
+                                if console: console.write(f"   🔗 ¡Encontré su web escondida!: {website}")
                                 break
                     except Exception as e:
                         pass
                 
                 if solo_sin_web and website != 'No tiene':
+                    if console: console.write(f"   ❌ Descartado: Ya tiene página web ({website}).")
                     continue
                     
+                if console: console.write(f"   ✅ **¡Prospecto Ideal Guardado!** ({len(results)+1}/{max_results})")
                 results.append({
                     "Nombre": details.get('name', 'N/A'),
                     "Teléfono": details.get('formatted_phone_number', 'N/A'),
@@ -208,15 +218,19 @@ def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0, so
             if len(results) >= max_results:
                 break
                 
-            # Si hay más páginas (Google permite hasta 60 resultados en total), pedimos la siguiente
+            # Si hay más páginas
             next_token = places_result.get('next_page_token')
             if not next_token:
+                if console: console.write(f"⚠️ Se acabaron los resultados de Google Maps en esta zona.")
                 break
                 
             import time
-            time.sleep(2) # Google requiere una pausa obligatoria de 2 seg antes de usar el token
+            if console: console.write(f"🔄 Agotamos la página {pagina}. Esperando 2 segundos para saltar a la página {pagina+1} de Maps...")
+            time.sleep(2) 
             places_result = gmaps.places(query=query, page_token=next_token)
+            pagina += 1
             
+        if console: console.update(label="✅ Extracción de Google Maps completada.", state="complete")
         return results
     except Exception as e:
         st.error(f"Error en Google Maps API: {e}")
@@ -311,10 +325,10 @@ if iniciar_btn:
     if not gmaps_api_key or not gemini_api_key:
         st.warning("⚠️ Por favor, ingresa tus API Keys en la pestaña de Configuración antes de continuar.")
     else:
-        st.info(f"Buscando '{search_query}'...")
+        st.info(f"Iniciando Misión de Prospección: '{search_query}'...")
         
-        with st.spinner("1️⃣ Extrayendo negocios de Google Maps..."):
-            leads = get_places(search_query, gmaps_api_key, max_results, min_rating, max_rating, solo_sin_web)
+        with st.status("🤖 Conectando con Google Maps...", expanded=True) as console:
+            leads = get_places(search_query, gmaps_api_key, max_results, min_rating, max_rating, solo_sin_web, console)
             
         if not leads:
             st.error("No se encontraron resultados o hubo un error con la API de Google Maps.")
