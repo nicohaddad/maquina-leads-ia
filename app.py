@@ -7,13 +7,61 @@ from io import BytesIO
 import time
 import base64
 from PIL import Image
+import json
+import os
+from googlesearch import search
+
+COST_FILE = "costos_historicos.json"
+
+def cargar_costo_historico():
+    if os.path.exists(COST_FILE):
+        try:
+            with open(COST_FILE, "r") as f:
+                data = json.load(f)
+                return data.get("costo_total", 0.0)
+        except:
+            return 0.0
+    return 0.0
+
+def agregar_costo_historico(nuevo_costo):
+    costo_actual = cargar_costo_historico()
+    costo_total = costo_actual + nuevo_costo
+    try:
+        with open(COST_FILE, "w") as f:
+            json.dump({"costo_total": costo_total}, f)
+    except:
+        pass
+    return costo_total
 
 # Configuración de la página
-st.set_page_config(page_title="Máquina de Prospección IA", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="Máquina de Prospección IA", page_icon="🤖", layout="wide", initial_sidebar_state="collapsed")
+
+# Inyectar CSS personalizado para que se vea más moderno
+st.markdown("""
+<style>
+    /* Mejorar botones */
+    .stButton>button {
+        border-radius: 8px;
+        font-weight: bold;
+        transition: 0.3s;
+    }
+    /* Tarjetas de métricas */
+    div[data-testid="metric-container"] {
+        background-color: rgba(28, 131, 225, 0.1);
+        border: 1px solid rgba(28, 131, 225, 0.1);
+        padding: 5% 5% 5% 10%;
+        border-radius: 8px;
+        color: rgb(30, 103, 119);
+        overflow-wrap: break-word;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Título y descripción
-st.title("🤖 Máquina Automática de Prospección con IA")
-st.markdown("Encuentra negocios, evalúa sus páginas web con Inteligencia Artificial y genera correos de ventas personalizados en minutos.")
+col_title1, col_title2 = st.columns([3, 1])
+with col_title1:
+    st.title("🤖 Máquina Automática de Prospección")
+    st.markdown("Encuentra negocios, evalúa su presencia digital con Inteligencia Artificial y genera correos de ventas hiper-personalizados en minutos.")
 
 # Inicializar estado para guardar resultados y no perderlos
 if 'resultados' not in st.session_state:
@@ -23,65 +71,90 @@ if 'total_tokens' not in st.session_state:
 if 'costo_estimado' not in st.session_state:
     st.session_state.costo_estimado = 0.0
 
-# --- BARRA LATERAL: CONFIGURACIÓN ---
-st.sidebar.header("🔑 Configuración de APIs")
-st.sidebar.markdown("Ingresa tus claves para que el sistema funcione.")
+# Crear Pestañas Principales para limpiar la interfaz
+tab_busqueda, tab_config = st.tabs(["🔍 Búsqueda y Resultados", "⚙️ Configuración del Motor IA"])
 
-# Cargar desde los "Secrets" de la nube si existen
-default_gmaps = st.secrets["GMAPS_API_KEY"] if "GMAPS_API_KEY" in st.secrets else ""
-default_gemini = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else ""
+with col_title2:
+    st.metric("💸 Consumo Total Histórico", f"${cargar_costo_historico():.4f} USD")
 
-gmaps_api_key = st.sidebar.text_input("Google Maps API Key", value=default_gmaps, type="password")
-gemini_api_key = st.sidebar.text_input("Gemini API Key", value=default_gemini, type="password")
+# ==========================================
+# PESTAÑA 2: CONFIGURACIÓN (Ocultamos lo técnico aquí)
+# ==========================================
+with tab_config:
+    st.header("Configuración Avanzada")
+    st.markdown("Ajusta las llaves, los criterios de evaluación y los mensajes de la IA.")
+    
+    col_conf1, col_conf2 = st.columns(2)
+    
+    with col_conf1:
+        st.subheader("🔑 Claves API")
+        default_gmaps = st.secrets["GMAPS_API_KEY"] if "GMAPS_API_KEY" in st.secrets else ""
+        default_gemini = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else ""
+        gmaps_api_key = st.text_input("Google Maps API Key", value=default_gmaps, type="password")
+        gemini_api_key = st.text_input("Gemini API Key", value=default_gemini, type="password")
+        
+        st.subheader("⭐ Filtros de Calidad de Google Maps")
+        min_rating = st.slider("Rating Mínimo", 0.0, 5.0, 0.0, 0.5)
+        max_rating = st.slider("Rating Máximo", 0.0, 5.0, 5.0, 0.5)
 
-st.sidebar.markdown("---")
-st.sidebar.header("🎯 Parámetros de Búsqueda")
-search_query = st.sidebar.text_input("¿Qué buscas?", value="Estéticas en Polanco, CDMX")
-max_results = st.sidebar.slider("Límite de negocios a analizar", min_value=1, max_value=20, value=5)
-solo_sin_web = st.sidebar.checkbox("🚨 Mostrar SOLO negocios SIN página web", value=False, help="Si marcas esto, el robot ignorará cualquier negocio que ya tenga sitio web.")
+    with col_conf2:
+        st.subheader("🧠 Matriz de Lead Scoring")
+        st.caption("Puntos otorgados a cada criterio para calcular el Score Final del lead.")
+        c1, c2, c3 = st.columns(3)
+        pts_resenas_altas = c1.number_input("100+ Reseñas", value=10)
+        pts_resenas_medias = c2.number_input("30-99 Reseñas", value=6)
+        pts_rating_alto = c3.number_input("Rating 4.6+", value=8)
+        pts_no_web = c1.number_input("No tiene web", value=15)
+        pts_web_mala = c2.number_input("Web mala/vieja", value=10)
+        pts_premium = c3.number_input("Servs. premium", value=10)
+        pts_marketing = c1.number_input("Ig activo", value=4)
+        pts_whatsapp = c2.number_input("WhatsApp", value=7)
+        pts_agenda = c3.number_input("Agenda/Citas", value=6)
 
-st.sidebar.markdown("---")
-st.sidebar.header("⭐ Filtros de Calidad (Scoring)")
-st.sidebar.caption("Filtra los negocios por su calificación en Google Maps.")
-min_rating = st.sidebar.slider("Rating Mínimo", 0.0, 5.0, 0.0, 0.5)
-max_rating = st.sidebar.slider("Rating Máximo", 0.0, 5.0, 5.0, 0.5)
+    st.markdown("---")
+    st.subheader("✍️ Personalización de Textos (Prompts)")
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        prompt_eval_input = st.text_area(
+            "Prompt de Evaluación Visual",
+            value="Eres un experto diseñador web. Revisa la captura de pantalla de esta página web. Evalúa si el diseño es moderno, o si parece antiguo, si tiene mala resolución o es poco profesional. Responde con una única palabra inicial: 'APROBADO' o 'RECHAZADO'. Luego, en la misma línea, escribe un guión '-' y da una breve razón de 1 sola frase del por qué.",
+            height=200
+        )
+    with p2:
+        prompt_email_input = st.text_area(
+            "Correo (Tienen Web FEA)",
+            value="Escribe un correo de ventas frío corto dirigido al dueño de '{business_name}'. Dile que visitaste su página web ({website_url}) y notaste lo siguiente: {evaluacion}. Ofrécele tus servicios de creación de páginas web con IA. Ofrece un prototipo gratis en 48h. Tono profesional, máximo 3 párrafos.",
+            height=200
+        )
+    with p3:
+        prompt_noweb_input = st.text_area(
+            "Correo (NO Tienen Web)",
+            value="Escribe un correo corto de ventas al dueño de '{business_name}'. Dile que los buscaste en internet y notaste que no tienen página web, lo cual les hace perder clientes. Ofrécele hacerles una web moderna con IA. Tono profesional.",
+            height=90
+        )
+        prompt_caido_input = st.text_area(
+            "Correo (Dominio Caído)",
+            value="Escribe un correo URGENTE al dueño de '{business_name}'. Dile que intentaste entrar a su web ({website_url}) desde Google Maps pero está CAÍDA. Ofrécele hacerles una web nueva con IA hoy mismo.",
+            height=90
+        )
 
-with st.sidebar.expander("Ajuste Fino de Puntos (Matriz)", expanded=False):
-    st.caption("Puntos otorgados a cada criterio para calcular el Score Final.")
-    pts_resenas_altas = st.number_input("100+ Reseñas", value=10)
-    pts_resenas_medias = st.number_input("30-99 Reseñas", value=6)
-    pts_rating_alto = st.number_input("Rating 4.6+", value=8)
-    pts_no_web = st.number_input("No tiene página web", value=15)
-    pts_web_mala = st.number_input("Web mala/vieja", value=10)
-    pts_premium = st.number_input("Servicios premium", value=10)
-    pts_marketing = st.number_input("Instagram activo", value=4)
-    pts_whatsapp = st.number_input("WhatsApp visible", value=7)
-    pts_agenda = st.number_input("Botón de Agenda/Citas", value=6)
+# ==========================================
+# PESTAÑA 1: BÚSQUEDA Y RESULTADOS
+# ==========================================
+with tab_busqueda:
+    st.markdown("### 🎯 Iniciar Nueva Prospección")
+    
+    col_busqueda1, col_busqueda2 = st.columns([2, 1])
+    with col_busqueda1:
+        search_query = st.text_input("¿A quién estás buscando hoy?", value="Estéticas en Polanco, CDMX", placeholder="Ej. Dentistas en Monterrey...")
+    with col_busqueda2:
+        max_results = st.number_input("Límite de negocios a extraer", min_value=1, max_value=20, value=5)
+    
+    solo_sin_web = st.checkbox("🚨 Filtro Estricto: Buscar SOLO negocios SIN página web (Ahorra tokens)", value=False)
+    
+    iniciar_btn = st.button("🚀 INICIAR PROSPECCIÓN AUTOMÁTICA", type="primary", use_container_width=True)
 
-st.sidebar.markdown("---")
-st.sidebar.header("🧠 Personalización de IA (Prompts)")
-with st.sidebar.expander("Modificar Instrucciones de IA", expanded=False):
-    st.caption("Puedes usar las variables {business_name}, {website_url} y {evaluacion} en tus correos.")
-    prompt_eval_input = st.text_area(
-        "Prompt de Evaluación Visual",
-        value="Eres un experto diseñador web. Revisa la captura de pantalla de esta página web. Evalúa si el diseño es moderno, o si parece antiguo, si tiene mala resolución o es poco profesional. Responde con una única palabra inicial: 'APROBADO' o 'RECHAZADO'. Luego, en la misma línea, escribe un guión '-' y da una breve razón de 1 sola frase del por qué. Ejemplo: RECHAZADO - El diseño parece de los años 2000 y los colores chocan.",
-        height=150
-    )
-    prompt_email_input = st.text_area(
-        "Prompt de Correo (Tienen Web)",
-        value="Escribe un correo de ventas frío corto dirigido al dueño de '{business_name}'. Dile que visitaste su página web ({website_url}) y notaste lo siguiente: {evaluacion}. Ofrécele tus servicios de creación de páginas web con IA. Ofrece un prototipo gratis en 48h. Tono profesional, máximo 3 párrafos.",
-        height=150
-    )
-    prompt_noweb_input = st.text_area(
-        "Prompt de Correo (NO Tienen Web)",
-        value="Escribe un correo corto de ventas al dueño de '{business_name}'. Dile que los buscaste en internet y notaste que no tienen página web, lo cual les hace perder clientes. Ofrécele hacerles una web moderna con IA. Tono profesional.",
-        height=100
-    )
-    prompt_caido_input = st.text_area(
-        "Prompt de Correo (Dominio Caído/Expirado)",
-        value="Escribe un correo URGENTE al dueño de '{business_name}'. Dile que intentaste entrar a su página web ({website_url}) desde Google Maps pero está CAÍDA o el dominio expiró. Explícale que están perdiendo clientes todos los días por esto y ofrécele hacerles una web nueva y moderna con IA esta misma semana.",
-        height=120
-    )
+
 
 # --- FUNCIONES CORE ---
 
@@ -104,6 +177,20 @@ def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0, so
                 continue
                 
             website = details.get('website', 'No tiene')
+            
+            # --- PARCHE INTELIGENTE: BÚSQUEDA WEB EN VIVO ---
+            if website == 'No tiene':
+                try:
+                    search_term = f"{details.get('name')} {query}"
+                    for url_result in search(search_term, num_results=3, lang="es"):
+                        # Ignorar directorios y redes sociales, buscar la web real
+                        directorios = ['facebook.com', 'instagram.com', 'foursquare', 'tripadvisor', 'yelp', 'linkedin', 'twitter', 'tiktok', 'youtube', 'doctoralia', 'maps.google', 'whatsapp.com', 'wa.me']
+                        if not any(d in url_result.lower() for d in directorios):
+                            website = url_result
+                            break
+                except Exception as e:
+                    pass
+            
             if solo_sin_web and website != 'No tiene':
                 continue
                 
@@ -205,9 +292,9 @@ def evaluate_website_and_write_email(img, website_url, business_name, gemini_key
 
 # --- INTERFAZ PRINCIPAL ---
 
-if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
+if iniciar_btn:
     if not gmaps_api_key or not gemini_api_key:
-        st.warning("⚠️ Por favor, ingresa tus API Keys en el panel lateral antes de continuar.")
+        st.warning("⚠️ Por favor, ingresa tus API Keys en la pestaña de Configuración antes de continuar.")
     else:
         st.info(f"Buscando '{search_query}'...")
         
@@ -325,6 +412,10 @@ if st.sidebar.button("🚀 Iniciar Prospección Automática", type="primary"):
                 
             status_text.text("¡Prospección completada! 🎉")
             
+            # Guardar costo en el histórico
+            if st.session_state.costo_estimado > 0:
+                agregar_costo_historico(st.session_state.costo_estimado)
+            
             # Guardar en la memoria de la sesión
             st.session_state.resultados = pd.DataFrame(resultados_finales)
 
@@ -357,9 +448,14 @@ if st.session_state.resultados is not None:
     today_str = datetime.date.today().strftime('%Y-%m-%d')
     dynamic_filename = f"leads_{safe_query}_{today_str}.xlsx"
     
-    st.download_button(
-        label="📥 Descargar Leads en Excel (.xlsx)",
-        data=excel_data,
-        file_name=dynamic_filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # Botón de Descarga Excel centrado
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_dl1, col_dl2, col_dl3 = st.columns([1,2,1])
+    with col_dl2:
+        st.download_button(
+            label="📥 Descargar Leads en Excel (.xlsx)",
+            data=excel_data,
+            file_name=dynamic_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
