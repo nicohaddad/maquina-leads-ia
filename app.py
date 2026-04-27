@@ -159,49 +159,64 @@ with tab_busqueda:
 # --- FUNCIONES CORE ---
 
 def get_places(query, api_key, max_results=5, min_rating=0.0, max_rating=5.0, solo_sin_web=False):
-    """Obtiene los lugares usando Google Maps API."""
+    """Obtiene los lugares usando Google Maps API, buscando en varias páginas si es necesario."""
     gmaps = googlemaps.Client(key=api_key)
     try:
-        places_result = gmaps.places(query=query)
         results = []
-        for place in places_result.get('results', []):
+        places_result = gmaps.places(query=query)
+        
+        while True:
+            for place in places_result.get('results', []):
+                if len(results) >= max_results:
+                    break
+                    
+                place_id = place['place_id']
+                # Obtener detalles completos
+                details = gmaps.place(place_id, fields=['name', 'website', 'formatted_phone_number', 'rating', 'url', 'user_ratings_total'])['result']
+                
+                rating = details.get('rating', 0.0)
+                if not (min_rating <= rating <= max_rating):
+                    continue
+                    
+                website = details.get('website', 'No tiene')
+                
+                # --- PARCHE INTELIGENTE: BÚSQUEDA WEB EN VIVO ---
+                if website == 'No tiene':
+                    try:
+                        search_term = f"{details.get('name')} {query}"
+                        for url_result in search(search_term, num_results=3, lang="es"):
+                            directorios = ['facebook.com', 'instagram.com', 'foursquare', 'tripadvisor', 'yelp', 'linkedin', 'twitter', 'tiktok', 'youtube', 'doctoralia', 'maps.google', 'whatsapp.com', 'wa.me', 'topdoctors', 'guiadental']
+                            if not any(d in url_result.lower() for d in directorios):
+                                website = url_result
+                                break
+                    except Exception as e:
+                        pass
+                
+                if solo_sin_web and website != 'No tiene':
+                    continue
+                    
+                results.append({
+                    "Nombre": details.get('name', 'N/A'),
+                    "Teléfono": details.get('formatted_phone_number', 'N/A'),
+                    "Website": website,
+                    "Rating": rating,
+                    "Reseñas": details.get('user_ratings_total', 0),
+                    "Google Maps": details.get('url', f"https://www.google.com/maps/place/?q=place_id:{place_id}")
+                })
+            
+            # Si ya tenemos los resultados deseados, salimos
             if len(results) >= max_results:
                 break
                 
-            place_id = place['place_id']
-            # Obtener detalles completos
-            details = gmaps.place(place_id, fields=['name', 'website', 'formatted_phone_number', 'rating', 'url', 'user_ratings_total'])['result']
-            
-            rating = details.get('rating', 0.0)
-            if not (min_rating <= rating <= max_rating):
-                continue
+            # Si hay más páginas (Google permite hasta 60 resultados en total), pedimos la siguiente
+            next_token = places_result.get('next_page_token')
+            if not next_token:
+                break
                 
-            website = details.get('website', 'No tiene')
+            import time
+            time.sleep(2) # Google requiere una pausa obligatoria de 2 seg antes de usar el token
+            places_result = gmaps.places(query=query, page_token=next_token)
             
-            # --- PARCHE INTELIGENTE: BÚSQUEDA WEB EN VIVO ---
-            if website == 'No tiene':
-                try:
-                    search_term = f"{details.get('name')} {query}"
-                    for url_result in search(search_term, num_results=3, lang="es"):
-                        # Ignorar directorios y redes sociales, buscar la web real
-                        directorios = ['facebook.com', 'instagram.com', 'foursquare', 'tripadvisor', 'yelp', 'linkedin', 'twitter', 'tiktok', 'youtube', 'doctoralia', 'maps.google', 'whatsapp.com', 'wa.me']
-                        if not any(d in url_result.lower() for d in directorios):
-                            website = url_result
-                            break
-                except Exception as e:
-                    pass
-            
-            if solo_sin_web and website != 'No tiene':
-                continue
-                
-            results.append({
-                "Nombre": details.get('name', 'N/A'),
-                "Teléfono": details.get('formatted_phone_number', 'N/A'),
-                "Website": website,
-                "Rating": rating,
-                "Reseñas": details.get('user_ratings_total', 0),
-                "Google Maps": details.get('url', f"https://www.google.com/maps/place/?q=place_id:{place_id}")
-            })
         return results
     except Exception as e:
         st.error(f"Error en Google Maps API: {e}")
